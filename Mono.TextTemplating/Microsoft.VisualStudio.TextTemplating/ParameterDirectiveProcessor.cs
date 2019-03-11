@@ -27,7 +27,9 @@
 using System.CodeDom;
 using System.CodeDom.Compiler;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.IO;
+using Microsoft.VisualStudio.TextTemplating.CodeDom;
 using Mono.TextTemplating;
 
 namespace Microsoft.VisualStudio.TextTemplating
@@ -141,7 +143,7 @@ namespace Microsoft.VisualStudio.TextTemplating
 			type = MapTypeName (type);
 			
 			string fieldName = "_" + name + "Field";
-			var typeRef = new CodeTypeReference (type);
+			var typeRef = new CodeTypeReference (type, CodeTypeReferenceOptions.GlobalReference);
 			var thisRef = new CodeThisReferenceExpression ();
 			var fieldRef = new CodeFieldReferenceExpression (thisRef, fieldName);
 			
@@ -206,13 +208,28 @@ namespace Microsoft.VisualStudio.TextTemplating
 			//if acquiredVariable is false, tries to gets the value from the host
 			if (hostSpecific) {
 				var hostRef = new CodePropertyReferenceExpression (thisRef, "Host");
+				CodeVariableDeclarationStatement convertDeclStmt = new CodeVariableDeclarationStatement (CodeDomHelpers.Ref (typeof (TypeConverter)), "tc",
+					typeof (TypeDescriptor).Expr ().Call ("GetConverter", new CodeTypeOfExpression (typeRef)));
+
 				var checkHost = new CodeConditionStatement (
 					BooleanAnd (IsFalse (acquiredVariableRef), NotNull (hostRef)),
 					new CodeVariableDeclarationStatement (typeof (string), "data",
 						new CodeMethodInvokeExpression (hostRef, "ResolveParameterValue", nullPrim, nullPrim,  namePrimitive)),
 					new CodeConditionStatement (
-						NotNull (valRef),
-						checkCastThenAssignVal));
+						typeof (string).Expr ().Call ("IsNullOrEmpty", valRef).VEquals (false.Prim ()),
+							convertDeclStmt,
+							new CodeConditionStatement (convertDeclStmt.Ref ().NotNull ().And (convertDeclStmt.Ref ().Call ("CanConvertFrom", new CodeTypeOfExpression (CodeDomHelpers.Ref (typeof (string))))),
+								new CodeStatement[] {
+									fieldRef.Assign(new CodeCastExpression(typeRef, convertDeclStmt.Ref().Call("ConvertFrom", valRef))),
+									new CodeAssignStatement (acquiredVariableRef, new CodePrimitiveExpression (true)),
+								},
+								new CodeStatement[] {
+									new CodeExpressionStatement (new CodeMethodInvokeExpression (thisRef, "Error",
+									new CodePrimitiveExpression ("The type '" + type + "' of the parameter '" + name +
+										"' did not match the type passed to the template"))),
+								}
+							)
+						));
 				
 				this.postStatements.Add (checkHost);
 			}
